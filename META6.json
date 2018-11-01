@@ -1,0 +1,27 @@
+{
+    "perl"        : "6.*",
+    "name"        : "QTF",
+    "version"     : "0.0.1",
+    "license"     : "MIT",
+    "description" : "Quick task framework for Perl 6.",
+    "tags": [
+        "task",
+        "framework",
+        "quick"
+    ],
+    "provides"    : {
+        "QTF::Channel"    : "lib/QTF/Channel.pm6",
+        "QTF::Message"    : "lib/QTF/Message.pm6",
+        "QTF::Result"     : "lib/QTF/Result.pm6",
+        "QTF::Runtime"    : "lib/QTF/Runtime.pm6",
+        "QTF::Task"       : "lib/QTF/Task.pm6",
+        "QTF::Tools"      : "lib/QTF/Tools.pm6"
+    },
+	"auth" : "github:araraloren",
+    "authors" : "Loren",
+    "source-url"  : "https://github.com/araraloren/QuickTaskFramework.git",
+    "support" : {
+        "bugtracker" : "https://github.com.araraloren/QuickTaskFramework/issues",
+        "source" : "https://github.com/araraloren/QuickTaskFramework.git"
+    }
+}
