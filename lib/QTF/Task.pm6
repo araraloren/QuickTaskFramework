@@ -5,13 +5,37 @@ unit module QTF::Task;
 
 class QTaskStatus is export {
 
-    enum < Ready Running Finish >;
+    enum < Ready Running Finish Unknow >;
 
     has $.status is rw;
     has $.result is rw;
 
-    method new($s, $r = Err Any) {
+    method new($s, $r = Ok Any) {
         self.bless(status => $s, result => $r);
+    }
+
+    method ready($r = Ok Any) {
+        self.new(QTaskStatus::Ready, $r);
+    }
+
+    method running($r = Ok Any) {
+        self.new(QTaskStatus::Running, $r);
+    }
+
+    method finish($r) {
+        self.new(QTaskStatus::Finish, $r);
+    }
+
+    method is-ready() {
+        $!status === QTaskStatus::Ready;
+    }
+
+    method is-running() {
+        $!status === QTaskStatus::Running;
+    }
+
+    method is-finish() {
+        $!status === QTaskStatus::Finish;
     }
 
     method eq($status) {
@@ -21,12 +45,15 @@ class QTaskStatus is export {
     method ne($status) {
         $!status !=== $status;
     }
+
+    method Bool() {
+        $!result.is-ok();
+    }
 }
 
 role QTask is export {
     has Str $.name;
     has @.dependency;
-    has QTaskStatus $!status;
 
     multi method new(Str:D $name, *%args) {
         self.bless(:$name, |%args);
@@ -36,55 +63,38 @@ role QTask is export {
         self.bless(:$name, :@dependency, |%args);
     }
 
-    method init($runtime) {
-        $!status = QTaskStatus.new(QTaskStatus::Ready);
-    }
+    method init($runtime) { }
 
     method initrun($runtime) { }
-
-    method ready() {
-        return $!status.eq: QTaskStatus::Ready;
-    }
-
-    method running() {
-        return $!status.eq: QTaskStatus::Running;
-    }
-
-    method finish() {
-        return $!status.eq: QTaskStatus::Finish;
-    }
 
     method dependency() {
         @!dependency;
     }
 
-    method check-dependency($runtime --> Bool) {
+    # This is called by runtime, at same THEAD
+    method check-dependency($runtime) {
         my $ret  = True;
         my @dep  = self.dependency();
 
         if +@dep > 0 {
             for @dep -> $dep {
-                my $task;
+                my $status = $runtime.status($dep);
 
-                if $dep ~~ QTask {
-                    $task = $dep;
-                }
-                elsif $dep ~~ Str {
-                    $task = $runtime.get($dep) or fail "No task named {$dep}";
-                }
-                else {
-                    fail "There is something not task or task name: {$dep.gist}";
+                if ( !$status.defined ) && ($dep ~~ QTask) {
+                    $runtime.qcue($dep);
+                    next;
                 }
 
-                given $task.status {
+                next if !$status.defined;
+
+                given $status.status {
                     when QTaskStatus::Ready {
-                        if ! $runtime.has($task.name) {
-                            $runtime.qcue($task);
-                        }
                         $ret &&= False;
                     }
                     when QTaskStatus::Finish {
-                        $ret &&= $task.result().is-ok();
+                        if ! $status.so {
+                            return QTaskStatus.finish(Err "Dependency {$dep.Str} finished with err: {$status.result.what}!");
+                        }
                     }
                     default {
                         $ret &&= False;
@@ -92,7 +102,7 @@ role QTask is export {
                 }
             }
         }
-        return $ret;
+        return $ret ?? QTaskStatus.running() !! QTaskStatus.ready();
     }
 
     method add-dependency($dependency --> ::?CLASS:D) {
@@ -101,29 +111,12 @@ role QTask is export {
         self;
     }
 
-    method status() {
-        $!status.status();
-    }
-
-    method set-result($result) {
-        if ! self.finish() {
-            $!status = QTaskStatus.new(QTaskStatus::Finish, $result);
-        }
-        else {
-            fail "The task is already finished!";
-        }
-    }
-
-    method result() {
-        $!status.result;
-    }
-
     method execute-run($runtime --> QResult) {
-        if self.ready() {
-            $!status.status = QTaskStatus::Running;
-            return self.run($runtime);
-        }
-        fail "Task is already running!";
+        return self.run($runtime);
+    }
+
+    method Str() {
+        $!name;
     }
 
     method run($runtime --> QResult) { ... }

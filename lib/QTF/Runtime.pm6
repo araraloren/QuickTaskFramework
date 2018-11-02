@@ -10,13 +10,19 @@ my constant RUNNING = 1;
 my constant READY   = 0;
 
 class QType is export {
-    enum < Comp Add Get Has Cue Save >;
+    enum < Set Add Get Has Cue Save Stat >;
+}
+
+class QThread {
+    has $.task;
+    has $.thread;
 }
 
 class QRuntime is export {
     has QTask %!task;
-    has       %!running;
-    has QTask %!remains;
+    has       @!running;
+    has QTask %!remain;
+    has       %!status;
     has Int $.max = 2;
     has Int $!cur = 0;
     has Int $.qqq = 2;
@@ -30,6 +36,7 @@ class QRuntime is export {
         atomic-assign($!running, READY);
         %!task{ .name } = .self for @tasks;
         $!supplier.= new;
+        @!running[$_] = Any for ^$!max;
     }
 
     method !q_handle(QMessage $m) {
@@ -38,17 +45,13 @@ class QRuntime is export {
         my $val;
 
         given $m.type {
-            when QType::Comp {
-                if !( %!task{$data.[0]}:exists ) {
-                    $p.keep(False);
-                    return;
+            when QType::Set {
+                my $name = $data.[0];
+                $val = %!status{$name}.is-finish();
+                if ! $val {
+                    %!status{$name} = QTaskStatus.finish($data.[1]);
                 }
-                $val = self!q_complete(%!task{$data.[0]} // QTask, $data.[1]);
-                if $val !~~ Failure {
-                    $p.keep(True);
-                } else {
-                    $p.break($val);
-                }
+                $p.keep(! $val);
             }
             when QType::Add | QType::Save {
                 $val = %!task{$data.[0].name}:exists;
@@ -65,8 +68,15 @@ class QRuntime is export {
                 $p.keep(%!task{$data.[0]}:exists);
             }
             when QType::Cue {
-                %!remains{$data.[0].name} = $data;
+                %!remain{$data.[0].name} = $data.[0];
                 $p.keep(True);
+            }
+            when QType::Stat {
+                if !( %!task{$data.[0]}:exists ) {
+                    $p.keep(QTaskStatus);
+                    return;
+                }
+                $p.keep(%!status{$data.[0]});
             }
             default {
                 die "Not recognize type: {$m.type}";
@@ -74,43 +84,41 @@ class QRuntime is export {
         }
     }
 
-    method !q_complete(QTask:D $task, $r) {
-        $task.set-result($r);
-    }
-
     method !q_run(QTask:D $task) {
-        my $should-run = $!cur < $!max && $task.ready();
-
+        my $should-run = $!cur < $!max;
         if $should-run {
-            %!running{$task.name} = start {
-                $task.initrun(self);
-                try {
-                    CATCH {
-                        default {
-                            $task.set-result(Err .self);
+            for ^$!max {
+                if ! @!running[$_].defined {
+                    @!running[$_] = QThread.new(
+                        task => $task,
+                        thread => start {
+                            $task.initrun(self);
+                            try {
+                                CATCH {
+                                    default {
+                                        self.qset( $task.name, Err .self );
+                                    }
+                                }
+                                self.qset($task.name, $task.execute-run(self));
+                            }
                         }
-                    }
-                    $task.set-result($task.execute-run(self));
+                    );
+                    last;
                 }
-            };
+            }
             $!cur += 1;
         }
         return $should-run;
     }
 
-    method !q_threadname() {
-        %!running.keys;
-    }
-
-    method !q_thread(Str:D $name) {
-        %!running{$name};
-    }
-
     method !q_init() {
         for %!task {
             .value.init(self);
+            %!status{.value.name} = QTaskStatus.new(QTaskStatus::Ready);
         }
     }
+
+    # Call this method without q* at same THREAD or before run
 
     method add(QTask:D $task --> Bool) {
         my $found = %!task{$task.name}:exists;
@@ -128,8 +136,18 @@ class QRuntime is export {
         %!task{$name}:exists;
     }
 
-    method qcomplete(Str:D $name, $r --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Comp, [ $name, $r ]));
+    multi method status(Str:D $name --> QTaskStatus) {
+        %!status{$name} // QTaskStatus;
+    }
+
+    multi method status(QTask:D $task --> QTaskStatus) {
+        %!status{$task.name} // QTaskStatus;
+    }
+
+    # Threadsafe method
+
+    method qset(Str:D $name, $r --> Promise) {
+        $!channel.send(my $qm = QMessage.new(QType::Set, [ $name, $r ]));
         $qm.promise;
     }
 
@@ -158,24 +176,58 @@ class QRuntime is export {
         $qm.promise;
     }
 
+    multi method qstatus(Str:D $name --> Promise) {
+        $!channel.send(my $qm = QMessage.new(QType::Stat, [ $name,    ]));
+        $qm.promise;
+    }
+
+    multi method qstatus(QTask:D $task --> Promise) {
+        $!channel.send(my $qm = QMessage.new(QType::Stat, [ $task.name,]));
+        $qm.promise;
+    }
+
     method Supply( --> Supply) {
         $!supplier.Supply;
     }
 
-    method stop() {
+    method qstop() {
         cas($!running, RUNNING, READY);
     }
 
     method run() {
         cas($!running, READY, RUNNING);
         self!q_init();
-        %!remains = %!task;
-        while atomic-fetch($!running) == RUNNING {
-            for %!remains.values -> $task {
-                if $task.check-dependency(self) {
-                    if $task.ready() {
-                        if self!q_run($task) {
-                            %!remains{$task.name}:delete;
+        %!remain = %!task;
+        while atomic-fetch($!running) == RUNNING || $!cur > 0 {
+            for %!remain.values -> $task {
+                my ($name, $run) = ($task.name, False);
+
+                if (%!status{$name}:exists) {
+                    given %!status{$name}.status {
+                        when QTaskStatus::Finish {
+                            %!remain{$name}:delete;        
+                        }
+                        when QTaskStatus::Ready {
+                            $run = True;
+                        }
+                    }
+                } else {
+                    $run = True;
+                }
+
+                if $run {
+                    my $next-status = $task.check-dependency(self);
+
+                    given $next-status.status  {
+                        when QTaskStatus::Finish {
+                            %!remain{$name}:delete;
+                            %!status{$name} = $next-status;
+                        }
+                        when QTaskStatus::Running {
+                            if self!q_run($task) {
+                                %!remain{$name}:delete;
+                                %!status{$name} = $next-status;
+                            }
                         }
                     }
                 }
@@ -188,17 +240,14 @@ class QRuntime is export {
                 }
             }
 
-            my @thread-name = self!q_threadname();
-
-            for @thread-name -> $name {
-                if self!q_thread($name) -> $thr {
-                    given $thr.status {
+            for @!running <-> $thread {
+                if $thread.defined {
+                    given $thread.thread.status {
                         when Planned { }
                         when Kept | Broken {
-                            my $task = %!running{$name};
                             $!cur -= 1;
-                            %!running{$name}:delete;
-                            $!supplier.emit: $task;
+                            $!supplier.emit: $thread.task;
+                            $thread = Any;
                         }
                     }
                 }
@@ -206,5 +255,6 @@ class QRuntime is export {
 
             sleep $!interval / 1000;
         }
+        $!supplier.done;
     }
 }

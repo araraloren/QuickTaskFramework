@@ -26,12 +26,13 @@ react {
     whenever Supply.interval(3) {
         for < if check > {
             given default-runtime().qget($_) {
-                say " >>> ", .result.name, " ==> ", .result.status, " >> ", .result.dependency();
+                say " >>> ", .result.name, " ==> ", .result.dependency();
+                say " ||| ", default-runtime().qstatus(.result.name).result;
             }
         }
 
-        if default-runtime().qget('if').result.finish() &&
-            default-runtime().qget('check').result.finish() {
+        if default-runtime().qstatus('if').result.is-finish() &&
+            default-runtime().qstatus('check').result.is-finish() {
                 my $check = default-runtime().qget('check').result;
 
                 say "File get from github ==> ";
