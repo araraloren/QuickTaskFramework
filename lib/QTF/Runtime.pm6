@@ -45,31 +45,45 @@ class QRuntime is export {
         my $val;
 
         given $m.type {
+            # Set the task status
+            # If the task is already finised, keep False
             when QType::Set {
-                my $name = $data.[0];
-                $val = %!status{$name}.is-finish();
-                if ! $val {
-                    %!status{$name} = QTaskStatus.finish($data.[1]);
-                }
-                $p.keep(! $val);
+                $p.keep(self!q_set(|@$data));
             }
-            when QType::Add | QType::Save {
-                $val = %!task{$data.[0].name}:exists;
-                if ! $val {
-                    %!task{$data.[0].name} = $data.[0];
+
+            # Save the task and its result
+            # Make the task status to Finish
+            # If task is already exists, keep False
+            when QType::Save {
+                my $val = self!q_save($data.[0]);
+                if $val {
+                    %!status{$data.[0].name} = QTaskStatus.finish($data.[1]);
                 }
                 $p.keep($val);
             }
+
+            # Get a task
+            # If task not exists, keep QTask
             when QType::Get {
                 $val = %!task{$data.[0]} // QTask;
                 $p.keep($val);
             }
+
             when QType::Has {
                 $p.keep(%!task{$data.[0]}:exists);
             }
+
+            # Schedule a task
+            # If task is already exists, keep False
             when QType::Cue {
-                %!remain{$data.[0].name} = $data.[0];
-                $p.keep(True);
+                my $val = self!q_save($data.[0]);
+                my $taskname = $data.[0].name;
+
+                if $val {
+                    %!remain{$taskname} = $data.[0];
+                    %!status{$taskname} = QTaskStatus.ready();
+                }
+                $p.keep($val);
             }
             when QType::Stat {
                 if !( %!task{$data.[0]}:exists ) {
@@ -111,10 +125,30 @@ class QRuntime is export {
         return $should-run;
     }
 
+    method !q_set(Str:D $name, $r) {
+        my $val = %!status{$name}.is-finish();
+        if ! $val {
+            %!status{$name} = QTaskStatus.finish($r);
+        }
+        return ! $val;
+    }
+
+    method !q_save(QTask:D $task) {
+        my $val = %!task{$task.name}:exists;
+        if ! $val {
+            %!task{$task.name} = $task;
+        }
+        return ! $val;
+    }
+
+    method !q_init_task(QTask:D $task) {
+        $task.init(self);
+        %!status{$task.name} = QTaskStatus.new(QTaskStatus::Ready);
+    }
+
     method !q_init() {
         for %!task {
-            .value.init(self);
-            %!status{.value.name} = QTaskStatus.new(QTaskStatus::Ready);
+            self!q_init_task(.value);
         }
     }
 
@@ -152,37 +186,42 @@ class QRuntime is export {
     }
 
     method qadd(QTask:D $task --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Add, [ $task,    ]));
+        $!channel.send(my $qm = QMessage.new(QType::Add, [ $task, ]));
+        $qm.promise;
+    }
+
+    method qdel(Str:D $name --> Promise) {
+        $!channel.send(my $qm = QMessage.new(QType::Del, [ $name, ]));
         $qm.promise;
     }
 
     method qget(Str:D $name --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Get, [ $name,    ]));
+        $!channel.send(my $qm = QMessage.new(QType::Get, [ $name, ]));
         $qm.promise;
     }
 
     method qhas(Str:D $name --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Has, [ $name,    ]));
+        $!channel.send(my $qm = QMessage.new(QType::Has, [ $name, ]));
         $qm.promise;
     }
 
     method qcue(QTask:D $task --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Cue, [ $task,    ]));
+        $!channel.send(my $qm = QMessage.new(QType::Cue, [ $task, ]));
         $qm.promise;
     }
 
-    method qsave(QTask:D $task --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Save, [ $task,    ]));
+    method qsave(QTask:D $task, $r --> Promise) {
+        $!channel.send(my $qm = QMessage.new(QType::Save, [ $task, $r]));
         $qm.promise;
     }
 
     multi method qstatus(Str:D $name --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Stat, [ $name,    ]));
+        $!channel.send(my $qm = QMessage.new(QType::Stat, [ $name, ]));
         $qm.promise;
     }
 
     multi method qstatus(QTask:D $task --> Promise) {
-        $!channel.send(my $qm = QMessage.new(QType::Stat, [ $task.name,]));
+        $!channel.send(my $qm = QMessage.new(QType::Stat, [ $task.name, ]));
         $qm.promise;
     }
 
@@ -205,7 +244,7 @@ class QRuntime is export {
                 if (%!status{$name}:exists) {
                     given %!status{$name}.status {
                         when QTaskStatus::Finish {
-                            %!remain{$name}:delete;        
+                            %!remain{$name}:delete;
                         }
                         when QTaskStatus::Ready {
                             $run = True;

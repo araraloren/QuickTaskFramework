@@ -47,7 +47,11 @@ class QTaskStatus is export {
     }
 
     method Bool() {
-        $!result.is-ok();
+        self.defined;
+    }
+
+    method what() {
+        $!result.what();
     }
 }
 
@@ -195,6 +199,10 @@ multi sub qtask(Str:D $name, Method $m, @dependency) is export {
     MethodTask.new($name, $m, @dependency);
 }
 
+multi sub qtask(Str:D $name, @dependency, Method $m) is export {
+    MethodTask.new($name, $m, @dependency);
+}
+
 multi sub qtask(Str:D $name, &cb) is export {
     CodeTask.new($name, &cb);
 }
@@ -203,10 +211,18 @@ multi sub qtask(Str:D $name, &cb, @dependency) is export {
     CodeTask.new($name, &cb, @dependency);
 }
 
+multi sub qtask(Str:D $name, @dependency, &cb) is export {
+    CodeTask.new($name, &cb, @dependency);
+}
+
 multi sub qtask(Str:D $name, Str:D $bin, @args) is export {
     CommandTask.new($name, $bin, @args);
 }
 
 multi sub qtask(Str:D $name, Str:D $bin, @args, @dependency) is export {
+    CommandTask.new($name, $bin, @args, @dependency);
+}
+
+multi sub qtask(Str:D $name, @dependency, Str:D $bin, @args) is export {
     CommandTask.new($name, $bin, @args, @dependency);
 }
