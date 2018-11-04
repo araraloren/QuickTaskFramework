@@ -1,44 +1,72 @@
 
 use QTF::Task;
-use QTF::Result;
-use QTF::Runtime;
 use QTF::Tools;
+use QTF::Result;
 
-constant $PROXY = 'socks5://192.168.0.100:18995';
+# get perl6.org page, get the NEWS
 
-task 'if', -> $r {
-    say "Checking shadowsocks-libev";
-    if ! "shadowsocks-libev".IO.e {
-        $r.qcue( qtask 'clone',
-            'git', [ "-c", "http.proxy=$PROXY", "-c", "https.proxy=$PROXY", "clone", 'https://github.com/shadowsocks/shadowsocks-libev', ] );
+constant PERL6ORG = 'https://www.perl6.org';
+
+task 'check', -> $r {
+    my $lwp = (try require LWP::Simple) !=== Nil;
+
+    if ! $lwp {
+        $r.qcue(
+            qtask 'curl', ['check', ], 'curl', [ PERL6ORG, ];
+        );
+        $r.qcue(
+            qtask 'end', ['curl', ], -> $r {
+                Ok 1;
+            }
+        );
     }
-    Ok 1;
-};
+    ($lwp ?? Ok(1) !! Err(0));
+}
+task 'lwp', ['check', ], -> $r {
+    if $r.qstatus('check').result.so {
+        $r.qcue(
+            qtask 'end', ['lwp', ], -> $r {
+                Ok 1;
+            }
+        );
 
-task 'check',
-    'ls', [ "shadowsocks-libev/", ], "shadowsocks-libev".IO.e ?? [ "if", ] !! [ "clone", ];
+        require LWP::Simple;
 
-start task();
+        my $page = LWP::Simple.new.get(PERL6ORG);
+
+        Ok $page;
+    } else {
+        Err 0;
+    }
+}
+
+start task() ;
 
 react {
-    "START".say;
-
-    whenever Supply.interval(3) {
-        for < if check > {
-            given default-runtime().qget($_) {
-                say " >>> ", .result.name, " ==> ", .result.dependency();
-                say " ||| ", default-runtime().qstatus(.result.name).result;
+    whenever Supply.interval(1) {
+        for < check lwp curl end > {
+            if (my $s = default-runtime().qstatus($_).result) {
+                say $_, "\t---=> ", $s.status;
+                if $_ eq 'end' && $s.is-finish() {
+                    if $s.result.is-ok() {
+                        if default-runtime().qstatus('check').result.so {
+                            &show-new-version(default-runtime().qstatus('lwp').result.what);
+                        } else {
+                            &show-new-version(default-runtime().qget('curl').result.out);
+                        }
+                    } else {
+                        say "Can not get the page: ", $s.result.what;
+                    }
+                    default-runtime.qstop();
+                    done;
+                }
             }
         }
+    }
+}
 
-        if default-runtime().qstatus('if').result.is-finish() &&
-            default-runtime().qstatus('check').result.is-finish() {
-                my $check = default-runtime().qget('check').result;
-
-                say "File get from github ==> ";
-                say $check.out;
-
-                done;
-            }
+sub show-new-version(Str:D $page) {
+    if $page ~~ / 'NEW:</b>' <-[<]>+? (\d+\.\d+) <-[<]>+ 'Released!' \</ {
+        say "The new version of Rakudo Star is ", $0.Str;
     }
 }
