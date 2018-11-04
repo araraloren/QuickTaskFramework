@@ -21,11 +21,19 @@ multi sub task(Str:D $name, &cb, @dependency) is export {
     default-runtime().add(qtask($name, &cb, @dependency));
 }
 
+multi sub task(Str:D $name, @dependency, &cb) is export {
+    default-runtime().add(qtask($name, &cb, @dependency));
+}
+
 multi sub task(Str:D $name, Str:D $bin, @args) is export {
     default-runtime().add(qtask($name, $bin, @args));
 }
 
 multi sub task(Str:D $name, Str:D $bin, @args, @dependency) is export {
+    default-runtime().add(qtask($name, $bin, @args, @dependency));
+}
+
+multi sub task(Str:D $name, @dependency, Str:D $bin, @args, ) is export {
     default-runtime().add(qtask($name, $bin, @args, @dependency));
 }
 
